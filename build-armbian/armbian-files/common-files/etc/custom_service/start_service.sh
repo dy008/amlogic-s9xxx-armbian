@@ -41,7 +41,9 @@ ophub_release_file="/etc/ophub-release"
     # USB2.0 Port ON
     gpioset 4 21=1 2>/dev/null
     gpioset 4 22=1 2>/dev/null
+    brcm_patchram_plus1 --enable_hci --no2bytes --use_baudrate_for_download --tosleep 200000 --baudrate 1500000 --patchram /lib/firmware/brcm/BCM4339A0.hcd /dev/ttyS1 &
     echo "[$(date +"%Y.%m.%d.%H:%M:%S")] USB successfully enabled on Swan1-w28(rk3568)." >>${custom_log}
+    echo "[$(date +"%Y.%m.%d.%H:%M:%S")] Bluetooth firmware successfully download on Swan1-w28(rk3568)." >>${custom_log}
 }
 
 # For smart-am60(rk3588) board Bluetooth contrl
