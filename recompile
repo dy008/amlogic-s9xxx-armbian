@@ -73,6 +73,10 @@ custom_name="-ophub"
 package_list="all"
 # Set the compression format, options: [ gzip / lzma / xz / zstd ]
 compress_format="xz"
+# Set whether to automatically delete the source code after the kernel is compiled
+delete_source="false"
+# Set make log silent output (recommended to use 'true' when github runner has insufficient space)
+silent_log="false"
 
 # Cross compile toolchain download mirror
 dev_repo="https://github.com/ophub/kernel/releases/download/dev"
@@ -130,7 +134,7 @@ init_var() {
     echo -e "${STEPS} Start Initializing Variables..."
 
     # If it is followed by [ : ], it means that the option requires a parameter value
-    get_all_ver="$(getopt "k:a:n:m:p:r:t:c:" "${@}")"
+    get_all_ver="$(getopt "k:a:n:m:p:r:t:c:d:s:" "${@}")"
 
     while [[ -n "${1}" ]]; do
         case "${1}" in
@@ -200,6 +204,22 @@ init_var() {
                 shift
             else
                 error_msg "Invalid -c parameter [ ${2} ]!"
+            fi
+            ;;
+        -d | --DeleteSource)
+            if [[ -n "${2}" ]]; then
+                delete_source="${2}"
+                shift
+            else
+                error_msg "Invalid -d parameter [ ${2} ]!"
+            fi
+            ;;
+        -s | --SilentLog)
+            if [[ -n "${2}" ]]; then
+                silent_log="${2}"
+                shift
+            else
+                error_msg "Invalid -s parameter [ ${2} ]!"
             fi
             ;;
         *)
@@ -370,6 +390,7 @@ apply_patch() {
     # Apply the common kernel patches
     if [[ -d "${kernel_patch_path}/common-kernel-patches" ]]; then
         echo -e "${INFO} Copy common kernel patches..."
+        rm -f ${kernel_path}/${local_kernel_path}/*.patch
         cp -vf ${kernel_patch_path}/common-kernel-patches/*.patch -t ${kernel_path}/${local_kernel_path}
 
         cd ${kernel_path}/${local_kernel_path}
@@ -385,6 +406,7 @@ apply_patch() {
     # Apply the dedicated kernel patches
     if [[ -d "${kernel_patch_path}/${local_kernel_path}" ]]; then
         echo -e "${INFO} Copy [ ${local_kernel_path} ] version dedicated kernel patches..."
+        rm -f ${kernel_path}/${local_kernel_path}/*.patch
         cp -vf ${kernel_patch_path}/${local_kernel_path}/*.patch -t ${kernel_path}/${local_kernel_path}
 
         cd ${kernel_path}/${local_kernel_path}
@@ -623,14 +645,17 @@ compile_dtbs() {
 compile_kernel() {
     cd ${kernel_path}/${local_kernel_path}
 
+    # Set the make log silent output
+    [[ "${silent_log}" == "true" || "${silent_log}" == "yes" ]] && silent_print="-s" || silent_print=""
+
     # Make kernel
     echo -e "${STEPS} Start compilation kernel [ ${local_kernel_path} ]..."
-    make ${MAKE_SET_STRING} Image modules dtbs -j${PROCESS}
+    make ${silent_print} ${MAKE_SET_STRING} Image modules dtbs -j${PROCESS}
     [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} The kernel is compiled successfully."
 
     # Install modules
     echo -e "${STEPS} Install modules..."
-    make ${MAKE_SET_STRING} INSTALL_MOD_PATH=${output_path}/modules modules_install
+    make ${silent_print} ${MAKE_SET_STRING} INSTALL_MOD_PATH=${output_path}/modules modules_install
     [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} The modules is installed successfully."
 
     # Strip debug information
@@ -733,6 +758,7 @@ clean_tmp() {
 
     sync && sleep 3
     rm -rf ${output_path}/{chroot/,boot/,dtb/,modules/,header/,${kernel_version}/}
+    [[ "${delete_source}" == "true" ]] && rm -rf ${kernel_path}/* 2>/dev/null
 
     update-grub 2>/dev/null
 

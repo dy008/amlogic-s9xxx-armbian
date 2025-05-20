@@ -31,6 +31,7 @@ on:
           - s912-x92_s922x_s922x-ct2000_s922x-reva_seewo-sv21_smart-am40_smart-am60_station-m1_sw799_swan1-w28
           - tanix-tx6_tb-ls3399_tn3399_tpm312_tqc-a01_tvi3315a_vplus_wxy-oec_xiaobao_yskj_zcube1-max_zk-r39a_zysj
           - a311d
+          - alark35-3500
           - beikeyun
           - chainedbox
           - crrc
@@ -160,6 +161,7 @@ on:
           - smart-am40
           - smart-am60
           - station-m1
+          - sv-33a6x
           - swan1-w28
           - sw799
           - tanix-tx6
@@ -306,6 +308,9 @@ jobs:
           wget -P ./build/extensions https://raw.githubusercontent.com/armbian/os/main/userpatches/extensions/ha.sh
           # 修改ha.sh脚本中的命令以停止internet host IP地址检测
           sed -i "/sed -i \"\/update-grub\/d\"/a\sed -i \"s\/while ! ping\/while   ping\/\" homeassistant-supervised/DEBIAN/postinst" ./build/extensions/ha.sh
+          # 在ha.sh的chroot_sdcard_apt_get_install方法里添加缺少的依赖包
+          more_ha_deps="systemd-timesyncd"
+          sed -i "s|systemd-journal-remote |systemd-journal-remote ${more_ha_deps} |g" ./build/extensions/ha.sh
           echo "status=success" >> ${GITHUB_OUTPUT}
 
       - name: Compile Armbian [ ${{ inputs.set_release }} ]
