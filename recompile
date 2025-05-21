@@ -63,6 +63,7 @@ host_release="$(cat /etc/os-release | grep '^VERSION_CODENAME=.*' | cut -d'=' -f
 repo_owner="unifreq"
 repo_branch="main"
 build_kernel=("6.1.y" "6.12.y")
+all_kernel=("5.4.y" "5.10.y" "5.15.y" "6.1.y" "6.6.y" "6.12.y")
 # Set whether to use the latest kernel, options: [ true / false ]
 auto_kernel="true"
 # Set whether to apply custom kernel patches, options: [ true / false ]
@@ -140,10 +141,14 @@ init_var() {
         case "${1}" in
         -k | --Kernel)
             if [[ -n "${2}" ]]; then
-                oldIFS="${IFS}"
-                IFS="_"
-                build_kernel=(${2})
-                IFS="${oldIFS}"
+                if [[ "${2}" == "all" ]]; then
+                    build_kernel=(${all_kernel[@]})
+                else
+                    oldIFS="${IFS}"
+                    IFS="_"
+                    build_kernel=(${2})
+                    IFS="${oldIFS}"
+                fi
                 shift
             else
                 error_msg "Invalid -k parameter [ ${2} ]!"
@@ -467,6 +472,7 @@ get_kernel_source() {
 chroot_armbian() {
     cd ${current_path}
     echo -e "${STEPS} Create chroot..."
+    echo -e "${INFO} Current space usage: \n$(df -hT ${chroot_path}) \n"
 
     rm -f ${chroot_file}
     cp -f ${armbian_file} ${chroot_file}
@@ -786,6 +792,9 @@ loop_recompile() {
             local_kernel_path="${code_repo}-${code_branch}"
         fi
 
+        # Show server start information
+        echo -e "${INFO} Server space usage before starting to compile: \n$(df -hT ${kernel_path}) \n"
+
         # Check disk space size
         echo -ne "(${j}) Start compiling the kernel [\033[92m ${kernel_version} \033[0m]. "
         now_remaining_space="$(df -Tk ${kernel_path} | tail -n1 | awk '{print $5}' | echo $(($(xargs) / 1024 / 1024)))"
@@ -830,9 +839,6 @@ echo -e "${INFO} kernel signature: [ ${custom_name} ]"
 echo -e "${INFO} Latest kernel version: [ ${auto_kernel} ]"
 echo -e "${INFO} kernel initrd compress: [ ${compress_format} ]"
 echo -e "${INFO} Kernel List: [ $(echo ${build_kernel[@]} | xargs) ] \n"
-
-# Show server start information
-echo -e "${INFO} Server space usage before starting to compile: \n$(df -hT ${kernel_path}) \n"
 
 # Loop to compile the kernel
 loop_recompile
