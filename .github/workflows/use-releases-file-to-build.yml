@@ -205,6 +205,7 @@ on:
         type: choice
         options:
           - ophub/kernel
+          - dy008/kernel
       kernel_usage:
         description: "Set the tags of the stable kernel."
         required: false
@@ -215,6 +216,7 @@ on:
           - flippy
           - dev
           - beta
+          - rk3588
       armbian_fstype:
         description: "Select armbian rootfs type."
         required: false
@@ -239,6 +241,7 @@ on:
         options:
           - ophub
           - angel
+          - dy008
 
 env:
   TZ: America/New_York
@@ -300,7 +303,7 @@ jobs:
           armbian_buildpath="build/output/images"
           [[ -d "${armbian_buildpath}" ]] || mkdir -p "${armbian_buildpath}"
           ln -sf /builder/build ${GITHUB_WORKSPACE}/build
-          ln -sf /builder/build /home/runner/work/_actions/ophub/amlogic-s9xxx-armbian/main/build
+          ln -sf /builder/build /home/runner/work/_actions/dy008/amlogic-s9xxx-armbian/main/build
 
           latest_version=$(curl -s \
                 -H "Accept: application/vnd.github+json" \
@@ -328,7 +331,7 @@ jobs:
           echo "status=success" >> ${GITHUB_OUTPUT}
 
       - name: Rebuild Armbian [ ${{ inputs.set_release }} ]
-        uses: ophub/amlogic-s9xxx-armbian@main
+        uses: dy008/amlogic-s9xxx-armbian@main
         if: ${{ steps.down.outputs.status }} == 'success' && !cancelled()
         with:
           build_target: armbian
