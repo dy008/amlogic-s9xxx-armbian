@@ -242,7 +242,11 @@ show_aml_model() {
 
         MODEL_NAME="$(echo "${ret}" | awk -F ':' '{print $2}')"
         AMLOGIC_SOC="$(echo "${ret}" | awk -F ':' '{print $3}')"
-        FDTFILE="$(echo "${ret}" | awk -F ':' '{print $4}')"
+        FDTFILE="$(
+            grep -oE 'meson[^[:space:]]*\.dtb' /boot/extlinux/extlinux.conf 2>/dev/null ||
+            grep -oE 'meson[^[:space:]]*\.dtb' /boot/uEnv.txt 2>/dev/null ||
+            echo "${ret}" | awk -F':' '{print $4}'
+        )"
         UBOOT_OVERLOAD="$(echo "${ret}" | awk -F ':' '{print $5}')"
         MAINLINE_UBOOT="$(echo "${ret}" | awk -F ':' '{print $6}')"
         BOOTLOADER_IMG="$(echo "${ret}" | awk -F ':' '{print $7}')"
@@ -364,6 +368,10 @@ create_partition() {
         BLANK1="700" # OneCloudPro-V1.2
         BOOT="512"
         BLANK2="220"
+    elif [[ "${AMLOGIC_SOC}" == "s912" && "${boxid}" -eq "214" ]]; then
+        BLANK1="256" # new OneCloudPro-V1.2 based on base image android_tv_onethingcloud-money-maker-pro-3rd-s912.tar.xz
+        BOOT="256"
+        BLANK2="0"
     elif [[ "${AMLOGIC_SOC}" == "s912" || "${AMLOGIC_SOC}" == "s905d" ]]; then
         BLANK1="68"
         BOOT="512"
@@ -440,6 +448,7 @@ copy_bootfs() {
     fi
 
     echo -e "${INFO} Formatting BOOTFS partition..."
+    sleep 1
     mkfs.vfat -F 32 -n "BOOT_EMMC" ${PART_BOOT}
     [[ "${?}" -eq "0" ]] || error_msg "Failed to format BOOTFS with [ mkfs.vfat ]."
 

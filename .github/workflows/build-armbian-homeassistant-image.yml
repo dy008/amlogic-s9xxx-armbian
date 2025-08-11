@@ -16,10 +16,11 @@ on:
         default: "bookworm"
         type: choice
         options:
-          - jammy
-          - noble
+          - trixie
           - bookworm
           - bullseye
+          - noble
+          - jammy
       armbian_board:
         description: "Select device board."
         required: false
@@ -177,7 +178,7 @@ on:
           - tvi3315a
           - vplus
           - wxy-oect
-          - wxy-oec-replaced
+          - wxy-oect-replaced
           - xiaobao
           - yskj
           - zcube1-max

@@ -15,10 +15,11 @@ on:
         default: "bookworm"
         type: choice
         options:
-          - jammy
-          - noble
+          - trixie
           - bookworm
           - bullseye
+          - noble
+          - jammy
       armbian_board:
         description: "Select device board."
         required: false
@@ -68,6 +69,7 @@ on:
           - nanopi-r5c
           - nanopi-r5s
           - orangepi-5-plus
+          - orangepi-5b
           - panther-x2
           - r66s
           - r68s
@@ -176,7 +178,7 @@ on:
           - tvi3315a
           - vplus
           - wxy-oect
-          - wxy-oec-replaced
+          - wxy-oect-replaced
           - xiaobao
           - yskj
           - zcube1-max

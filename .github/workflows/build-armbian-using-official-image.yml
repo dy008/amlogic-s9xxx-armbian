@@ -170,7 +170,7 @@ on:
           - tvi3315a
           - vplus
           - wxy-oect
-          - wxy-oec-replaced
+          - wxy-oect-replaced
           - xiaobao
           - yskj
           - zcube1-max
@@ -315,7 +315,7 @@ jobs:
 
           # Get the release name of the rebuild armbian file
           set_release=""
-          ARR_RELEASE=("jammy" "noble" "bookworm" "bullseye")
+          ARR_RELEASE=("noble" "jammy" "trixie" "bookworm" "bullseye")
           i=1
           for r in ${ARR_RELEASE[*]}; do
               if [[ "${armbian_url}" == *"${r}"* ]]; then
