@@ -250,7 +250,7 @@ on:
         type: choice
         options:
           - ophub
-          - angel
+          - dy008
 
 env:
   TZ: Etc/UTC
@@ -361,7 +361,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Rebuild Armbian
-        uses: ophub/amlogic-s9xxx-armbian@main
+        uses: dy008/amlogic-s9xxx-armbian@main
         if: ${{ steps.clean.outputs.status }} == 'success' && !cancelled()
         with:
           build_target: armbian
