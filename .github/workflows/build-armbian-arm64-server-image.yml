@@ -230,6 +230,7 @@ on:
           - stable
           - flippy
           - beta
+          - rk3588
       armbian_fstype:
         description: "Select armbian rootfs type."
         required: false
