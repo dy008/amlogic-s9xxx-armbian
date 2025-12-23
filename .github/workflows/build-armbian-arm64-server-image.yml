@@ -220,6 +220,7 @@ on:
         type: choice
         options:
           - ophub/kernel
+          - dy008/kernel
       kernel_usage:
         description: "Set the tags of the stable kernel."
         required: false
@@ -229,6 +230,7 @@ on:
           - stable
           - flippy
           - beta
+          - rk3588
       armbian_fstype:
         description: "Select armbian rootfs type."
         required: false
@@ -253,7 +255,7 @@ on:
         type: choice
         options:
           - ophub
-          - angel
+          - dy008
 
 env:
   TZ: Etc/UTC
@@ -321,7 +323,7 @@ jobs:
           df -hT ${PWD}
           git clone -q --single-branch --depth=1 --branch=main https://github.com/armbian/build.git build
           ln -sf /builder/build ${{ github.workspace }}/build
-          ln -sf /builder/build /home/runner/work/_actions/ophub/amlogic-s9xxx-armbian/main/build
+          ln -sf /builder/build /home/runner/work/_actions/dy008/amlogic-s9xxx-armbian/main/build
           echo "status=success" >> ${GITHUB_OUTPUT}
 
       - name: Compile Armbian [ ${{ inputs.set_release }} ]
@@ -364,7 +366,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Rebuild Armbian
-        uses: ophub/amlogic-s9xxx-armbian@main
+        uses: dy008/amlogic-s9xxx-armbian@main
         if: ${{ steps.clean.outputs.status }} == 'success' && !cancelled()
         with:
           build_target: armbian
