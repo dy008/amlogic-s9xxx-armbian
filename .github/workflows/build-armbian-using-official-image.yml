@@ -83,6 +83,8 @@ on:
           - lckfb-tspi
           - lckfb-tspi-3m
           - leez
+          - lubancat-1
+          - lubancat-2
           - lx-r3s
           - lyt-t68m
           - lz-d3568
@@ -100,6 +102,7 @@ on:
           - orangepi-5-plus
           - orangepi-5b
           - orangepi-zero3
+          - painet-p3
           - panther-x2
           - photonicat
           - r66s
