@@ -18,8 +18,10 @@
 # error_msg           : Output error message
 # check_release       : Check the system release
 # backup_source_list  : Backup the source list
+# show_mirror_list    : Display the mirror list
 # change_source_list  : Change the APT mirror source
 # select_mirror_site  : Select the mirror site
+# main                : Main entry point
 #
 #========================= Set default parameters ==========================
 #
@@ -61,9 +63,49 @@ check_release() {
 
 # Backup the source list
 backup_source_list() {
+    # If the source file exists and the backup file does not exist, then back up the source file to the backup file
     [[ -f "${armbian_source_file}" && ! -f "${armbian_source_backup_file}" ]] && {
         cp -f "${armbian_source_file}" "${armbian_source_backup_file}"
     }
+
+    # Disable outdated APT source files
+    [[ -f "/etc/apt/sources.list" ]] && mv -f /etc/apt/sources.list /etc/apt/sources.list.bak
+}
+
+# Display the mirror list
+# In certain countries or regions, the mirror hosts for Debian and Ubuntu differ and can be configured separately
+show_mirror_list() {
+    cat <<EOF
+  ┌──────┬───────────────────┬─────────────────────────────────┐
+  │  ID  │  Country/Region   │  Mirror Site                    │
+  ├──────┼───────────────────┼─────────────────────────────────┤
+  │   0  │  -                │  Restore default source         │
+  ├──────┼───────────────────┼─────────────────────────────────┤
+  │   1  │  China            │  mirrors.tuna.tsinghua.edu.cn   │
+  │   2  │  China            │  mirrors.bfsu.edu.cn            │
+  │   3  │  China            │  mirrors.aliyun.com             │
+  │   4  │  China            │  mirrors.huaweicloud.com        │
+  │   5  │  Taiwan, China    │  mirror.twds.com.tw             │
+  ├──────┼───────────────────┼─────────────────────────────────┤
+  │   6  │  Russia           │  mirror.yandex.ru               │
+  │   7  │  South Korea      │  ftp.kaist.ac.kr                │
+  │   8  │  South Korea      │  ftp.lanet.kr                   │
+  │   9  │  Singapore        │  mirror.sg.gs                   │
+  │  10  │  Australia        │  mirror.aarnet.edu.au           │
+  ├──────┼───────────────────┼─────────────────────────────────┤
+  │  11  │  United States    │  mirrors.ocf.berkeley.edu       │
+  │  12  │  United States    │  files.openstack.org/mirror     │
+  │  13  │  United States    │  steadfastnet.com,leaseweb.net  │
+  │  14  │  Canada           │  mirror.csclub.uwaterloo.ca     │
+  │  15  │  Canada           │  mirror.servercodes.com         │
+  ├──────┼───────────────────┼─────────────────────────────────┤
+  │  16  │  Denmark          │  ftp.openbsd.dk/mirrors         │
+  │  17  │  Denmark          │  mirrors.dotsrc.org             │
+  │  18  │  Germany          │  mirror.dogado.de               │
+  │  19  │  Germany          │  ftp.de.debian.org,ftp.fau.de   │
+  │  20  │  United Kingdom   │  mirror.yuki.net.uk             │
+  └──────┴───────────────────┴─────────────────────────────────┘
+EOF
 }
 
 # Change the APT mirror source
@@ -77,6 +119,7 @@ change_source_list() {
         declare -a suites=("${VERSION_CODENAME}" "${VERSION_CODENAME}-updates")
         declare -a components=(main contrib non-free)
 
+        declare -a security_suites=()
         if [[ "${VERSION_CODENAME}" != "buster" && "${VERSION_CODENAME}" != "bullseye" ]]; then
             # EOS releases doesn't get security updates
             declare -a security_suites=("${VERSION_CODENAME}-security")
@@ -86,7 +129,7 @@ change_source_list() {
 
         cat >${armbian_source_file} <<EOF
             Types: deb
-            URIs: http://${MIRROR_URL}/debian
+            URIs: ${DEBIAN_MIRROR}
             Suites: ${suites[@]}
             Components: ${components[@]}
             Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
@@ -95,7 +138,7 @@ EOF
         if [[ ${#security_suites[@]} -gt 0 ]]; then
             cat >>${armbian_source_file} <<EOF
             Types: deb
-            URIs: http://${MIRROR_URL}/debian-security
+            URIs: ${DEBIAN_SECURITY}/
             Suites: ${security_suites[@]}
             Components: ${components[@]}
             Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
@@ -107,7 +150,7 @@ EOF
     resolute | focal | jammy | noble | oracular | plucky | questing)
         cat >${armbian_source_file} <<EOF
             Types: deb
-            URIs: http://${MIRROR_URL}/ubuntu-ports/
+            URIs: ${UBUNTU_MIRROR}/
             Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-security ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-backports
             Components: main restricted universe multiverse
             Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
@@ -118,7 +161,7 @@ EOF
     sid | unstable)
         cat >${armbian_source_file} <<EOF
             Types: deb
-            URIs: http://${MIRROR_URL}/debian
+            URIs: ${DEBIAN_MIRROR}/
             Suites: ${VERSION_CODENAME}
             Components: main contrib non-free non-free-firmware
             Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
@@ -133,7 +176,7 @@ EOF
     esac
 
     # Remove the space at the beginning of each line
-    sed -i 's|^[ t]*||g' ${armbian_source_file}
+    sed -i 's|^[ \t]*||' "${armbian_source_file}"
     echo -e "${SUCCESS} APT mirror source changed successfully."
 }
 
@@ -142,85 +185,72 @@ select_mirror_site() {
     source_id="${1}"
     echo -e "${INFO} Selected mirror source ID: [ ${source_id} ]"
 
+    # ID 0: restore default source from backup
+    if [[ "${source_id}" == "0" ]]; then
+        if [[ -f "${armbian_source_backup_file}" ]]; then
+            # Restore the source file from the backup file
+            cp -f "${armbian_source_backup_file}" "${armbian_source_file}"
+            [[ -f "/etc/apt/sources.list.bak" ]] && cp -f /etc/apt/sources.list.bak /etc/apt/sources.list
+
+            echo -e "${SUCCESS} Default source restored successfully."
+            exit 0
+        else
+            error_msg "Default source backup file not found."
+        fi
+    fi
+
+    # Look up MIRROR_URL from show_mirror_list table by matching the ID column
+    # Strip all spaces from the table, then locate the row starting with │${source_id}│
+    # and take the third field (the mirror site host) as MIRROR_URL
+    MIRROR_URL="$(show_mirror_list | tr -d ' ' | grep "^│${source_id}│" | awk -F '│' '{print $4}')"
+    [[ -z "${MIRROR_URL}" ]] && error_msg "Invalid mirror source ID."
+
+    # Compose the three repository URLs from the selected mirror host
+    DEBIAN_MIRROR="http://${MIRROR_URL}/debian"
+    DEBIAN_SECURITY="http://${MIRROR_URL}/debian-security"
+    UBUNTU_MIRROR="http://${MIRROR_URL}/ubuntu-ports"
+
+    # Configure Debian and Ubuntu mirror sources separately for certain countries/regions
     case "${source_id}" in
-        0)
-            # Restore the default source
-            if [[ -f "${armbian_source_backup_file}" ]]; then
-                cp -f "${armbian_source_backup_file}" "${armbian_source_file}"
-                echo -e "${SUCCESS} Default source restored successfully." && exit 0
-            else
-                error_msg "Default source backup file not found."
-            fi
-            ;;
-        1)  MIRROR_URL="mirrors.tuna.tsinghua.edu.cn" ;;
-        2)  MIRROR_URL="mirrors.bfsu.edu.cn" ;;
-        3)  MIRROR_URL="mirrors.aliyun.com" ;;
-        4)  MIRROR_URL="mirrors.xtom.hk" ;;
-        5)  MIRROR_URL="opensource.nchc.org.tw" ;;
-        6)  MIRROR_URL="mirrors.ocf.berkeley.edu" ;;
-        7)  MIRROR_URL="mirrors.xtom.com" ;;
-        8)  MIRROR_URL="mirrors.mit.edu" ;;
-        9)  MIRROR_URL="mirror.csclub.uwaterloo.ca" ;;
-        10) MIRROR_URL="muug.ca/mirror" ;;
-        11) MIRROR_URL="ftp.openbsd.dk/mirrors" ;;
-        12) MIRROR_URL="mirrors.xtom.nl" ;;
-        13) MIRROR_URL="mirrors.xtom.de" ;;
-        14) MIRROR_URL="mirror.yandex.ru" ;;
-        15) MIRROR_URL="in.mirror.coganng.com" ;;
-        16) MIRROR_URL="mirrors.xtom.ee" ;;
-        17) MIRROR_URL="mirrors.xtom.au" ;;
-        18) MIRROR_URL="mirror.yuki.net.uk" ;;
-        19) MIRROR_URL="mirror.sg.gs" ;;
-        20) MIRROR_URL="mirrors.xtom.jp" ;;
-        *) error_msg "Invalid mirror source ID." ;;
+    13)
+        DEBIAN_MIRROR="https://mirror.steadfastnet.com/debian"
+        DEBIAN_SECURITY="https://mirror.steadfastnet.com/debian-security"
+        UBUNTU_MIRROR="https://mirror.us.leaseweb.net/ubuntu-ports"
+        ;;
+    19)
+        DEBIAN_MIRROR="http://ftp.de.debian.org/debian"
+        DEBIAN_SECURITY="http://ftp.de.debian.org/debian-security"
+        UBUNTU_MIRROR="https://ftp.fau.de/ubuntu-ports"
+        ;;
     esac
 
     # Change the source list
     change_source_list
 }
 
-echo -e "${STEPS} Welcome to the APT Mirror Source Switching Tool."
-# Check the system release information
-check_release
-# Backup the source list
-backup_source_list
+# Main entry point
+main() {
+    echo -e "${STEPS} Welcome to the APT Mirror Source Switching Tool."
+    # Check the system release information
+    check_release
+    # Backup the source list
+    backup_source_list
 
-# Prompt the user to input the source ID
-echo -e "${INFO} Please select a [\033[92m ${VERSION_CODENAME} \033[0m] mirror site."
-cat <<EOF
-  ┌──────┬───────────────────┬────────────────────────────────┐
-  │  ID  │  Country/Region   │  Mirror Site                   │
-  ├──────┼───────────────────┼────────────────────────────────┤
-  │   0  │  -                │  Restore default source        │
-  │   1  │  China            │  mirrors.tuna.tsinghua.edu.cn  │
-  │   2  │  China            │  mirrors.bfsu.edu.cn           │
-  │   3  │  China            │  mirrors.aliyun.com            │
-  │   4  │  Hongkong, China  │  mirrors.xtom.hk               │
-  │   5  │  Taiwan, China    │  opensource.nchc.org.tw        │
-  ├──────┼───────────────────┼────────────────────────────────┤
-  │   6  │  United States    │  mirrors.ocf.berkeley.edu      │
-  │   7  │  United States    │  mirrors.xtom.com              │
-  │   8  │  United States    │  mirrors.mit.edu               │
-  │   9  │  Canada           │  mirror.csclub.uwaterloo.ca    │
-  │  10  │  Canada           │  muug.ca/mirror                │
-  ├──────┼───────────────────┼────────────────────────────────┤
-  │  11  │  Denmark          │  ftp.openbsd.dk/mirrors        │
-  │  12  │  Netherlands      │  mirrors.xtom.nl               │
-  │  13  │  Germany          │  mirrors.xtom.de               │
-  │  14  │  Russia           │  mirror.yandex.ru              │
-  │  15  │  India            │  in.mirror.coganng.com         │
-  ├──────┼───────────────────┼────────────────────────────────┤
-  │  16  │  Estonia          │  mirrors.xtom.ee               │
-  │  17  │  Australia        │  mirrors.xtom.au               │
-  │  18  │  South Korea      │  mirror.yuki.net.uk            │
-  │  19  │  Singapore        │  mirror.sg.gs                  │
-  │  20  │  Japan            │  mirrors.xtom.jp               │
-  └──────┴───────────────────┴────────────────────────────────┘
-EOF
-echo -ne "${OPTIONS} Please Input ID: "
-read mwid
+    # Prompt the user to input the source ID
+    echo -e "${INFO} Please select a [\033[92m ${VERSION_CODENAME} \033[0m] mirror site."
+    show_mirror_list
+    echo -ne "${OPTIONS} Please Input ID: "
+    read mwid
 
-case "${mwid}" in
-    [0-9]*) select_mirror_site "${mwid}" ;;
-         *) error_msg "Invalid input." && exit 0 ;;
-esac
+    # Validate the input and select the mirror site
+    case "${mwid}" in
+    [0-9]*)
+        select_mirror_site "${mwid}"
+        ;;
+    *)
+        error_msg "Invalid input."
+        ;;
+    esac
+}
+
+main "${@}"
