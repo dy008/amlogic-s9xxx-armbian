@@ -166,9 +166,12 @@ runs:
                 echo -e "The Armbian file is invalid!"
                 exit 1
             fi
-            [[ "${down_file:0-7}" == ".img.gz" ]] && gzip -df ${down_file} 2>/dev/null && sync
-            [[ "${down_file:0-7}" == ".img.xz" ]] && xz -d ${down_file} 2>/dev/null && sync
-            [[ "${down_file:0-4}" == ".zip" ]] && unzip -o ${down_file} 2>/dev/null && sync
+            # Decompress the Armbian image file.
+            case "${down_file}" in
+                *.img.gz) gzip -df "${down_file}" 2>/dev/null && sync ;;
+                *.img.xz) xz -d "${down_file}" 2>/dev/null && sync ;;
+                *.zip)    unzip -o "${down_file}" 2>/dev/null && sync ;;
+            esac
             echo -e "Armbian file: \n$(ls -lh *.img 2>/dev/null)"
 
             echo -e "Checking the Armbian filename (-trunk_)..."
@@ -180,7 +183,7 @@ runs:
                 # Get image version, such as 25.11.0
                 image_version="$(echo ${image_file} | grep -oE '[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}' | head -n 1)"
                 # Get image kernel version, such as 6.12.56
-                image_kernel="$(echo ${image_file} | grep -oE '[0-9]+\.[0-9]{1,2}\.[0-9]{1,3}' | grep -v "${image_version}" | head -n 1)"
+                image_kernel="$(echo ${image_file} | grep -oE '[0-9]+\.[0-9]{1,2}\.[0-9]{1,3}' | grep -vxF "${image_version}" | head -n 1)"
                 # Get image codename, such as trixie
                 image_codename="$(echo ${image_file} | grep -oE "(trixie|bookworm|bullseye|resolute|noble|jammy)" || echo '')"
                 # Rename armbian image file
@@ -202,23 +205,41 @@ runs:
                 echo -e "Using the default Armbian rebuild files."
             fi
 
+            # Set builder custom signature
+            [[ -n "${{ inputs.builder_name }}" ]] && {
+                builder_name="${{ inputs.builder_name }}"
+                builder_name="${builder_name// /-}"
+            }
+
             cd ${{ github.action_path }}
             echo -e "Starting to rebuild Armbian..."
-            make_command=""
-            [[ -n "${{ inputs.armbian_board }}" ]] && make_command="${make_command} -b ${{ inputs.armbian_board }}"
-            [[ -n "${{ inputs.kernel_repo }}" ]] && make_command="${make_command} -r ${{ inputs.kernel_repo }}"
-            [[ -n "${{ inputs.kernel_usage }}" ]] && make_command="${make_command} -u ${{ inputs.kernel_usage }}"
-            [[ -n "${{ inputs.armbian_kernel }}" ]] && make_command="${make_command} -k ${{ inputs.armbian_kernel }}"
-            [[ -n "${{ inputs.auto_kernel }}" ]] && make_command="${make_command} -a ${{ inputs.auto_kernel }}"
-            [[ -n "${{ inputs.armbian_fstype }}" ]] && make_command="${make_command} -t ${{ inputs.armbian_fstype }}"
-            [[ -n "${{ inputs.armbian_size }}" ]] && make_command="${make_command} -s ${{ inputs.armbian_size }}"
-            [[ -n "${{ inputs.builder_name }}" ]] && make_command="${make_command} -n ${{ inputs.builder_name }}"
-            read -r -a make_args <<< "${make_command}"
+            make_args=()
+            [[ -n "${{ inputs.armbian_board }}"   ]] && make_args+=(-b "${{ inputs.armbian_board }}")
+            [[ -n "${{ inputs.kernel_repo }}"     ]] && make_args+=(-r "${{ inputs.kernel_repo }}")
+            [[ -n "${{ inputs.kernel_usage }}"    ]] && make_args+=(-u "${{ inputs.kernel_usage }}")
+            [[ -n "${{ inputs.armbian_kernel }}"  ]] && make_args+=(-k "${{ inputs.armbian_kernel }}")
+            [[ -n "${{ inputs.auto_kernel }}"     ]] && make_args+=(-a "${{ inputs.auto_kernel }}")
+            [[ -n "${{ inputs.armbian_fstype }}"  ]] && make_args+=(-t "${{ inputs.armbian_fstype }}")
+            [[ -n "${{ inputs.armbian_size }}"    ]] && make_args+=(-s "${{ inputs.armbian_size }}")
+            [[ -n "${builder_name}"               ]] && make_args+=(-n "${builder_name}")
             sudo ./rebuild "${make_args[@]}"
 
             cd ${{ github.action_path }}/${armbian_filepath}
-            # Compress Armbian image file
-            pigz -qf *.img || gzip -qf *.img
+            # Compress Armbian image file. Guard against an empty glob (no .img produced) and
+            # prefer pigz when present, otherwise fall back to gzip.
+            shopt -s nullglob
+            imgs=( *.img )
+            shopt -u nullglob
+            if [[ "${#imgs[@]}" -eq 0 ]]; then
+                echo "error: No .img file produced in [ ${PWD} ], aborting."
+                echo "PACKAGED_STATUS=failure" >> ${GITHUB_ENV}
+                exit 1
+            fi
+            if command -v pigz >/dev/null 2>&1; then
+                pigz -qf "${imgs[@]}"
+            else
+                gzip -qf "${imgs[@]}"
+            fi
             sync && sleep 3
 
             cd ${{ github.action_path }}
@@ -268,27 +289,32 @@ runs:
                 echo -e "No custom kernel patches provided."
             fi
 
+            # Set kernel custom signature
+            [[ -n "${{ inputs.kernel_sign }}" ]] && {
+                kernel_sign="${{ inputs.kernel_sign }}"
+                kernel_sign="${kernel_sign// /-}"
+            }
+
             echo -e "Building kernel compilation command."
-            make_command=""
-            [[ -n "${{ inputs.kernel_source }}" ]] && make_command="${make_command} -r ${{ inputs.kernel_source }}"
-            [[ -n "${{ inputs.kernel_version }}" ]] && make_command="${make_command} -k ${{ inputs.kernel_version }}"
-            [[ -n "${{ inputs.kernel_auto }}" ]] && make_command="${make_command} -a ${{ inputs.kernel_auto }}"
-            [[ -n "${{ inputs.kernel_package }}" ]] && make_command="${make_command} -m ${{ inputs.kernel_package }}"
-            [[ -n "${{ inputs.auto_patch }}" ]] && make_command="${make_command} -p ${{ inputs.auto_patch }}"
-            [[ -n "${{ inputs.kernel_sign }}" ]] && make_command="${make_command} -n ${{ inputs.kernel_sign }}"
-            [[ -n "${{ inputs.kernel_toolchain }}" ]] && make_command="${make_command} -t ${{ inputs.kernel_toolchain }}"
-            [[ -n "${{ inputs.compress_format }}" ]] && make_command="${make_command} -z ${{ inputs.compress_format }}"
-            [[ -n "${{ inputs.delete_source }}" ]] && make_command="${make_command} -d ${{ inputs.delete_source }}"
-            [[ -n "${{ inputs.silent_log }}" ]] && make_command="${make_command} -s ${{ inputs.silent_log }}"
-            [[ -n "${{ inputs.ccache_clear }}" ]] && make_command="${make_command} -c ${{ inputs.ccache_clear }}"
-            [[ -n "${{ inputs.config_flavor }}" ]] && make_command="${make_command} -f ${{ inputs.config_flavor }}"
-            [[ -n "${{ inputs.enable_log }}" ]] && make_command="${make_command} -l ${{ inputs.enable_log }}"
-            [[ -n "${{ inputs.docker_hostpath }}" ]] && make_command="${make_command} -h ${{ inputs.docker_hostpath }}"
-            [[ -n "${{ inputs.docker_image }}" ]] && make_command="${make_command} -i ${{ inputs.docker_image }}"
-            read -r -a make_args <<< "${make_command}"
+            make_args=()
+            [[ -n "${{ inputs.kernel_source }}"    ]] && make_args+=(-r "${{ inputs.kernel_source }}")
+            [[ -n "${{ inputs.kernel_version }}"   ]] && make_args+=(-k "${{ inputs.kernel_version }}")
+            [[ -n "${{ inputs.kernel_auto }}"      ]] && make_args+=(-a "${{ inputs.kernel_auto }}")
+            [[ -n "${{ inputs.kernel_package }}"   ]] && make_args+=(-m "${{ inputs.kernel_package }}")
+            [[ -n "${{ inputs.auto_patch }}"       ]] && make_args+=(-p "${{ inputs.auto_patch }}")
+            [[ -n "${{ inputs.kernel_toolchain }}" ]] && make_args+=(-t "${{ inputs.kernel_toolchain }}")
+            [[ -n "${{ inputs.compress_format }}"  ]] && make_args+=(-z "${{ inputs.compress_format }}")
+            [[ -n "${{ inputs.delete_source }}"    ]] && make_args+=(-d "${{ inputs.delete_source }}")
+            [[ -n "${{ inputs.silent_log }}"       ]] && make_args+=(-s "${{ inputs.silent_log }}")
+            [[ -n "${{ inputs.ccache_clear }}"     ]] && make_args+=(-c "${{ inputs.ccache_clear }}")
+            [[ -n "${{ inputs.config_flavor }}"    ]] && make_args+=(-f "${{ inputs.config_flavor }}")
+            [[ -n "${{ inputs.enable_log }}"       ]] && make_args+=(-l "${{ inputs.enable_log }}")
+            [[ -n "${{ inputs.docker_hostpath }}"  ]] && make_args+=(-h "${{ inputs.docker_hostpath }}")
+            [[ -n "${{ inputs.docker_image }}"     ]] && make_args+=(-i "${{ inputs.docker_image }}")
+            [[ -n "${kernel_sign}"                 ]] && make_args+=(-n "${kernel_sign}")
             sudo ./recompile "${make_args[@]}"
 
-            cd ${{ inputs.docker_hostpath }}
+            cd ${{ inputs.docker_hostpath || github.action_path }}
             kernel_outpath="compile-kernel/output"
             output_tags="$(ls -l ${kernel_outpath}/*.tar.gz 2>/dev/null | awk '{print $9}' | grep -oP '\d+\.\d+\.\d+' | sort -u | xargs | tr "[ ]" "_")"
             echo -e "Setting output environment variables."

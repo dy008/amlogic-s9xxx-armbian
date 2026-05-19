@@ -16,19 +16,18 @@ on:
       armbian_board:
         description: "Select device board."
         required: false
-        default: "all"
+        default: "amlogic"
         type: choice
         options:
-          - all
-          - amlogic
-          - rockchip
           - allwinner
+          - amlogic
           - rockchip50
           - rockchip50_100
+          - rockchip100_150
           - first50
           - range50_100
           - range100_150
-          - last20
+          - last50
           - a311d-oes_s922x-oes-plus_wxy-oect
           - nsy-g16-plus_nsy-g68-plus_bdy-g18-pro
           - s905d_s905x3_s912_s922x-ct2000
@@ -44,6 +43,8 @@ on:
           - beikeyun
           - boca-tcn100
           - boca-tcn200
+          - bt-100m
+          - bt-1000m
           - cd1000
           - chainedbox
           - cm3588-nas
@@ -76,6 +77,7 @@ on:
           - hs530r
           - ht2
           - hugsun-x99
+          - indiedroid-nova
           - ipc-r
           - jp-tvbox
           - king3399
@@ -85,6 +87,7 @@ on:
           - leez
           - lubancat-1
           - lubancat-2
+          - lubancat-4
           - lx-r3s
           - lyt-t68m
           - lz-d3568
@@ -405,16 +408,16 @@ jobs:
           builder_name: ${{ inputs.builder_name }}
 
       - name: Upload Armbian images to Release
-        uses: ncipollo/release-action@main
+        uses: ophub/upload-to-releases@main
         if: ${{ env.PACKAGED_STATUS == 'success' && !cancelled() }}
         with:
           tag: ${{ env.build_tag }}
           artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
-          allowUpdates: true
-          removeArtifacts: false
-          replacesArtifacts: true
-          makeLatest: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          allow_updates: true
+          remove_artifacts: false
+          replaces_artifacts: true
+          make_latest: true
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
           body: |
             ### Armbian Image Information
             - Default username: `root`

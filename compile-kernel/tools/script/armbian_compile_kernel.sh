@@ -408,8 +408,8 @@ query_version() {
         github_kernel_repo="${code_owner}/${linux_repo}/${code_branch}"
         github_kernel_ver="https://raw.githubusercontent.com/${github_kernel_repo}/Makefile"
         # latest_version="125"
-        latest_version="$(curl -s ${github_kernel_ver} | grep -oE "SUBLEVEL =.*" | head -n 1 | grep -oE '[0-9]{1,3}')"
-        if [[ "${?}" -eq "0" && -n "${latest_version}" ]]; then
+        latest_version="$(curl -fsSL -m 20 ${github_kernel_ver} 2>/dev/null | grep -oE "^SUBLEVEL = .*" | head -n 1 | grep -oE '[0-9]{1,3}')"
+        if [[ -n "${latest_version}" ]]; then
             tmp_arr_kernels[${i}]="${MAIN_LINE}.${latest_version}"
         else
             error_msg "Failed to query the kernel version in [ github.com/${github_kernel_repo} ]"
@@ -428,11 +428,14 @@ apply_patch() {
     cd ${current_path}
     echo -e "${STEPS} Applying custom kernel patches..."
 
+    # Avoid iterating over a literal [ *.patch ] when no patch files are present.
+    shopt -s nullglob
+
     # Apply the common kernel patches
     if [[ -d "${kernel_patch_path}/common-kernel-patches" ]]; then
         echo -e "${INFO} Copying common kernel patches..."
         rm -f ${kernel_path}/${local_kernel_path}/*.patch
-        cp -vf ${kernel_patch_path}/common-kernel-patches/*.patch -t ${kernel_path}/${local_kernel_path}
+        cp -vf ${kernel_patch_path}/common-kernel-patches/*.patch -t ${kernel_path}/${local_kernel_path} 2>/dev/null || true
 
         cd ${kernel_path}/${local_kernel_path}
         for file in *.patch; do
@@ -448,7 +451,7 @@ apply_patch() {
     if [[ -d "${kernel_patch_path}/${local_kernel_path}" ]]; then
         echo -e "${INFO} Copying [ ${local_kernel_path} ] version dedicated kernel patches..."
         rm -f ${kernel_path}/${local_kernel_path}/*.patch
-        cp -vf ${kernel_patch_path}/${local_kernel_path}/*.patch -t ${kernel_path}/${local_kernel_path}
+        cp -vf ${kernel_patch_path}/${local_kernel_path}/*.patch -t ${kernel_path}/${local_kernel_path} 2>/dev/null || true
 
         cd ${kernel_path}/${local_kernel_path}
         for file in *.patch; do
@@ -459,6 +462,8 @@ apply_patch() {
     else
         echo -e "${INFO} No [ ${local_kernel_path} ] version dedicated kernel patches found, skipping."
     fi
+
+    shopt -u nullglob
 }
 
 get_kernel_source() {
@@ -580,7 +585,7 @@ compile_env() {
     deb_path="${output_path}/deb-${kernel_version}"
 
     # Create a temp directory
-    rm -rf ${output_path}/{boot/,dtb/,modules/,header/,libc_headers/,${kernel_version}/,deb-${kernel_version}/}
+    rm -rf ${output_path}/{boot/,dtb/,modules/,header/,libc_headers/,${kernel_version}/,deb-${kernel_version}/} || true
     mkdir -p ${output_path}/{boot/,dtb/{allwinner/,amlogic/,rockchip/},modules/,header/,libc_headers/,${kernel_version}/,deb-${kernel_version}/}
 
     cd ${kernel_path}/${local_kernel_path}
@@ -596,7 +601,7 @@ compile_env() {
     # Set generic make string
     MAKE_SET_STRING=" ARCH=${SRC_ARCH} CROSS_COMPILE=${CROSS_COMPILE} ${MFLAGS} LOCALVERSION=${LOCALVERSION} "
 
-    # Make clean/mrproper
+    # Make clean/mrproper (this always removes any existing .config)
     make ${MAKE_SET_STRING} CC="${CC}" LD="${LD}" mrproper
 
     # Clear ccache if enabled
@@ -605,14 +610,10 @@ compile_env() {
         ccache -C 2>/dev/null
     }
 
-    # Check .config file
-    if [[ ! -s ".config" ]]; then
-        [[ -s "${config_path}/config-${kernel_verpatch}" ]] || error_msg "Missing [ config-${kernel_verpatch} ] template!"
-        echo -e "${INFO} Copy [ ${config_path}/config-${kernel_verpatch} ] to [ .config ]"
-        cp -f ${config_path}/config-${kernel_verpatch} .config
-    else
-        echo -e "${INFO} Use the .config file in the current directory."
-    fi
+    # Install kernel config template (mrproper above always wipes the previous .config)
+    [[ -s "${config_path}/config-${kernel_verpatch}" ]] || error_msg "Missing [ config-${kernel_verpatch} ] template!"
+    echo -e "${INFO} Copy [ ${config_path}/config-${kernel_verpatch} ] to [ .config ]"
+    cp -f ${config_path}/config-${kernel_verpatch} .config
     # Clear kernel signature
     sed -i "s|CONFIG_LOCALVERSION=.*|CONFIG_LOCALVERSION=\"\"|" .config
 
@@ -629,7 +630,11 @@ compile_env() {
         # Add RUST support for version 6.1.y and later versions
         if [[ "${kernel_x}" -gt 6 ]] || [[ "${kernel_x}" -eq 6 && "${kernel_y}" -ge 1 ]]; then
             echo -e "${INFO} Kernel version [ ${kernel_version} ] requires RUST. Preparing the environment..."
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            # Reuse the existing rustup installation across kernels and re-runs to avoid
+            # re-downloading the toolchain every time the loop iterates.
+            if [[ ! -x "${HOME}/.cargo/bin/rustup" ]]; then
+                curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            fi
             export PATH="${HOME}/.cargo/bin:${PATH}"
 
             echo -e "${INFO} Setting Rust toolchain to version required by the kernel..."
@@ -639,9 +644,12 @@ compile_env() {
             rustup component add rust-src
 
             echo -e "${INFO} Installing correct bindgen version..."
-            cargo uninstall bindgen-cli bindgen >/dev/null 2>&1 || true
             BINDGEN_VERSION="$(scripts/min-tool-version.sh bindgen 2>/dev/null || echo "0.65.1")"
-            cargo install --locked --version "${BINDGEN_VERSION}" bindgen-cli 2>/dev/null || cargo install --locked --version "${BINDGEN_VERSION}" bindgen
+            installed_bindgen="$(bindgen --version 2>/dev/null | awk '{print $2}')"
+            if [[ "${installed_bindgen}" != "${BINDGEN_VERSION}" ]]; then
+                cargo uninstall bindgen-cli bindgen >/dev/null 2>&1 || true
+                cargo install --locked --version "${BINDGEN_VERSION}" bindgen-cli 2>/dev/null || cargo install --locked --version "${BINDGEN_VERSION}" bindgen
+            fi
 
             echo -e "${INFO} Rust environment is ready. Enabling RUST support in kernel config..."
             scripts/config -e RUST
@@ -664,8 +672,11 @@ compile_dtbs() {
 
     # Make dtbs
     echo -e "${STEPS} Compiling dtbs [ ${local_kernel_path} ]..."
-    make ${MAKE_SET_STRING} CC="${CC}" LD="${LD}" dtbs -j${PROCESS}
-    [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} The dtbs compiled successfully."
+    if make ${MAKE_SET_STRING} CC="${CC}" LD="${LD}" dtbs -j${PROCESS}; then
+        echo -e "${SUCCESS} The dtbs compiled successfully."
+    else
+        error_msg "dtbs compilation failed."
+    fi
 }
 
 compile_kernel() {
@@ -685,10 +696,20 @@ compile_kernel() {
     make ${silent_print} ${MAKE_SET_STRING} CC="${CC}" LD="${LD}" INSTALL_MOD_PATH=${output_path}/modules modules_install
     [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} Modules installed successfully." || error_msg "Modules installation failed."
 
+    # Get the real kernel version from the installed modules, and adjust the kernel output name if necessary
+    real_kver="$(ls -1 ${output_path}/modules/lib/modules/ 2>/dev/null | head -n 1)"
+    if [[ -n "${real_kver}" && "${real_kver}" != "${kernel_outname}" ]]; then
+        echo -e "${INFO} Adjusting kernel output name from [ ${kernel_outname} ] to [ ${real_kver} ] (per modules_install)."
+        kernel_outname="${real_kver}"
+    fi
+
     # Strip debug information
     STRIP="${CROSS_COMPILE}strip"
-    find ${output_path}/modules -name "*.ko" -print0 | xargs -0 ${STRIP} --strip-debug 2>/dev/null
-    [[ "${?}" -eq "0" ]] && echo -e "${SUCCESS} Modules stripped successfully." || echo -e "${WARNING} Modules stripping failed."
+    if find ${output_path}/modules -name "*.ko" -print0 | xargs -0 "${STRIP}" --strip-debug 2>/dev/null; then
+        echo -e "${SUCCESS} Modules stripped successfully."
+    else
+        echo -e "${WARNING} Modules stripping failed."
+    fi
 
     # Collect kernel headers for building external modules
     echo -e "${STEPS} Collecting kernel headers..."
@@ -1008,8 +1029,8 @@ if [[ ! -f /boot/initrd.img-KERNEL_NAME || ! -f /boot/uInitrd-KERNEL_NAME ]]; th
 fi
 
 # Handle uInitrd based on platform and model
-if [[ "${MODEL_ID}" =~ ^(r304|r306)$ ]]; then
-    # Special handling for MODEL_ID r304 and r306
+if [[ "${MODEL_ID}" =~ ^(r306|r307)$ ]]; then
+    # Special handling for MODEL_ID r306 and r307
     [[ -f initrd.img-KERNEL_NAME ]] && {
         [[ -f uInitrd ]] && rm -f uInitrd
         ln -sf initrd.img-KERNEL_NAME uInitrd
@@ -1049,8 +1070,9 @@ done
 
 # Remove old linux-image packages from dpkg database (background, wait for dpkg lock release)
 (
-    # Wait for the parent dpkg process to release the lock
-    while fuser /var/lib/dpkg/lock >/dev/null 2>&1; do sleep 1; done
+    # Wait for the parent dpkg process to release BOTH the dpkg lock and the apt frontend lock
+    while fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+       || fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done
     for pkg in $(dpkg-query -W -f='${Package}\n' 2>/dev/null | grep -E "^linux-image-"); do
         [[ "${pkg}" == "CURRENT_IMAGE_PKG" ]] && continue
         dpkg --purge --force-depends "${pkg}" 2>/dev/null || true
@@ -1137,7 +1159,9 @@ set -e
 
 # Remove old linux-libc-dev packages
 (
-    while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 1; done
+    # Wait for the parent dpkg process to release BOTH the dpkg lock and the apt frontend lock
+    while fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+       || fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done
     for pkg in $(dpkg-query -W -f='${Package}\n' 2>/dev/null | grep -E '^linux-libc-dev-'); do
         [[ "${pkg}" == "CURRENT_LIBC_PKG" ]] && continue
         dpkg --purge --force-depends "${pkg}" 2>/dev/null || true
@@ -1261,7 +1285,9 @@ done
 
 # Remove old linux-headers packages from dpkg database (background, wait for dpkg lock release)
 (
-    while fuser /var/lib/dpkg/lock >/dev/null 2>&1; do sleep 1; done
+    # Wait for the parent dpkg process to release BOTH the dpkg lock and the apt frontend lock
+    while fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+       || fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 3; done
     for pkg in $(dpkg-query -W -f='${Package}\n' 2>/dev/null | grep -E "^linux-headers-"); do
         [[ "${pkg}" == "CURRENT_HEADERS_PKG" ]] && continue
         dpkg --purge --force-depends "${pkg}" 2>/dev/null || true
@@ -1471,10 +1497,12 @@ loop_recompile() {
 
         # Show compilation start information
         echo -e "${INFO} Armbian space usage before compilation: \n$(df -hT ${kernel_path}) \n"
+        echo -e "${INFO} Armbian memory before compilation: \n$(free -h) \n"
 
         # Check disk space size
         echo -ne "(${j}) Compiling kernel [\033[92m ${kernel_version} \033[0m]. "
-        now_remaining_space="$(df -Tk ${kernel_path} | tail -n1 | awk '{print $5}' | echo $(($(xargs) / 1024 / 1024)))"
+        now_remaining_space="$(df -PTk ${kernel_path} | tail -n1 | awk '{printf "%d", $5/1024/1024}')"
+        [[ -z "${now_remaining_space}" ]] && now_remaining_space="0"
         if [[ "${now_remaining_space}" -le "15" ]]; then
             echo -e "${WARNING} Remaining space is less than 15G, exiting compilation."
             break

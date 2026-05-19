@@ -64,13 +64,34 @@ update_script() {
     # Download the latest scripts from the repository
     echo -e "${INFO} Fetching latest scripts from repository..."
     git_tmp_path="$(mktemp -d)"
+    # Ensure tmp dir is removed on any exit path (success / error / Ctrl-C)
+    trap '[[ -n "${git_tmp_path}" && -d "${git_tmp_path}" ]] && rm -rf "${git_tmp_path}" 2>/dev/null' EXIT INT TERM
+
     cd ${git_tmp_path}
     git init --quiet
     git remote add origin ${script_repo}
     git config core.sparseCheckout true
+    # Network tuning to survive flaky links
+    git config http.postBuffer 524288000
+    git config http.lowSpeedLimit 1024
+    git config http.lowSpeedTime 30
     echo "${script_dir}/*" >>.git/info/sparse-checkout
-    git pull --quiet --depth=1 origin main
-    [[ "${?}" -ne "0" ]] && error_msg "Failed to download scripts from [ ${script_repo} ]."
+
+    # Retry git pull up to 3 times with exponential backoff (5s -> 10s -> 20s)
+    pull_ok="0"
+    pull_delay="5"
+    for pull_try in 1 2 3; do
+        if timeout 180 git pull --quiet --depth=1 origin main; then
+            pull_ok="1"
+            break
+        fi
+        if [[ "${pull_try}" -lt "3" ]]; then
+            echo -e "${INFO} git pull failed (attempt ${pull_try}/3), retrying in ${pull_delay}s..."
+            sleep "${pull_delay}"
+            pull_delay=$((pull_delay * 2))
+        fi
+    done
+    [[ "${pull_ok}" -ne "1" ]] && error_msg "Failed to download scripts from [ ${script_repo} ]."
 
     # Update the compilation scripts
     cd ${make_path}

@@ -327,6 +327,12 @@ verify_version() {
     # Check if the kernel is already installed
     if [[ "${current_kernel}" == "${inputs_kernel}" ]]; then
         echo -e "${INFO} The current kernel [ ${current_kernel} ] is already up to date."
+        # In non-interactive contexts (cron, systemd timers, automated SSH), prompting
+        # for input would hang forever; default to a safe "no" instead of blocking.
+        if [[ ! -t 0 ]]; then
+            echo -e "${FINISH} Non-interactive shell detected; skipping force update."
+            exit 0
+        fi
         echo -ne "${PROMPT} Do you want to force update? [y/n]: "
         read force_update
         case "${force_update,,}" in
@@ -452,7 +458,7 @@ download_kernel() {
     kernel_down_from="https://github.com/${KERNEL_REPO}/releases/download/kernel_${KERNEL_TAGS}/${down_filename}"
 
     echo -e "${INFO} Download URL: [ ${kernel_down_from} ]"
-    curl -fsSL "${kernel_down_from}" -o "${kernel_path}/${down_filename}"
+    curl -fsSL --retry 5 --retry-delay 5 "${kernel_down_from}" -o "${kernel_path}/${down_filename}"
     [[ "${?}" -ne "0" ]] && error_msg "Failed to download the kernel package."
 
     # Extract the downloaded kernel package
@@ -557,14 +563,24 @@ backup_kernel() {
     [[ -d "${backup_path}" ]] || mkdir -p ${backup_path}
     rm -rf ${backup_path}/${current_kernel}
 
-    # Keep the latest 3 kernel backups and delete the others
-    backup_kernel_list=($(ls ${backup_path} -lt | grep "^d" | awk '{print $9}'))
-    [[ "${#backup_kernel_list[@]}" -ge "3" ]] && {
-        for ((i = 2; i < ${#backup_kernel_list[@]}; i++)); do rm -rf ${backup_path}/${backup_kernel_list[$i]}; done
-    }
+    # Keep the latest 3 kernel backups and delete the others.
+    backup_kernel_list=()
+    while IFS= read -r -d '' line; do
+        backup_kernel_list+=("$(basename "${line#* }")")
+    done < <(find "${backup_path}" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\0' 2>/dev/null | sort -zrn)
+
+    if [[ "${#backup_kernel_list[@]}" -ge "3" ]]; then
+        for ((i = 2; i < ${#backup_kernel_list[@]}; i++)); do
+            rm -rf "${backup_path}/${backup_kernel_list[$i]}"
+        done
+    fi
 
     # Identify the current kernel files
     mkdir -p ${backup_path}/${current_kernel}
+
+    # Ensure a half-written backup directory is removed if any subsequent step fails.
+    backup_cleanup_target="${backup_path}/${current_kernel}"
+    trap '[[ -n "${backup_cleanup_target}" ]] && rm -rf "${backup_cleanup_target}"' EXIT
 
     # Create temporary file directory
     kernel_tmp_path="$(mktemp -d)"
@@ -572,8 +588,13 @@ backup_kernel() {
 
     # 1. Pack the boot-*.tar.gz file
     rm -rf *
-    cp -rf /boot/*-${kernel_uname} -t .
-    [[ "${?}" -ne "0" ]] && error_msg "(1/4) Failed to copy [ /boot/*-${kernel_uname} ] files."
+    # Avoid passing the literal glob to [ cp ] when no matching files exist.
+    boot_files=(/boot/*-${kernel_uname})
+    if [[ -e "${boot_files[0]}" ]]; then
+        cp -rf "${boot_files[@]}" -t . || error_msg "(1/4) Failed to copy [ /boot/*-${kernel_uname} ] files."
+    else
+        error_msg "(1/4) No [ /boot/*-${kernel_uname} ] files found to back up."
+    fi
     rm -rf dtb*
     chmod +x *
     tar -czf boot-${kernel_uname}.tar.gz *
@@ -614,9 +635,13 @@ backup_kernel() {
 
     # Add sha256sum integrity verification file
     cd ${backup_path}/${current_kernel}
-    sha256sum * >sha256sums
+    sha256sum *.tar.gz >sha256sums 2>/dev/null || true
     echo -e "${INFO} [ sha256sums ] file has been generated."
     echo -e "${INFO} Current kernel backup path: [ ${backup_path}/${current_kernel} ]."
+
+    # Backup completed successfully; disable the cleanup trap.
+    trap - EXIT
+    backup_cleanup_target=""
 
     sync && echo ""
 }
@@ -730,20 +755,43 @@ update_tar_kernel() {
     # Check if the kernel package is in tar.gz format
     [[ "${download_type}" == "tar" ]] || error_msg "The kernel package is not in tar.gz format."
 
+    # Verify all required tarballs exist before touching the live system, so that a
+    # missing/corrupt download cannot leave the device with no kernel installed at all.
+    for prefix in "${kernel_tar_list[@]}"; do
+        # header is optional, skip it during this pre-check
+        [[ "${prefix}" == "header" ]] && continue
+        [[ -s "${kernel_path}/${prefix}-${kernel_name}.tar.gz" ]] || error_msg "Missing required package [ ${prefix}-${kernel_name}.tar.gz ]."
+    done
+
     # Backup the current DTB files
     backup_fdtfile
+
+    # Extract the boot files to a staging directory
+    boot_stage="$(mktemp -d)"
+    tar -mxzf boot-${kernel_name}.tar.gz -C "${boot_stage}" || {
+        rm -rf "${boot_stage}"
+        error_msg "Failed to extract [ boot-${kernel_name}.tar.gz ]."
+    }
+    [[ "$(ls "${boot_stage}"/*${kernel_name}* 2>/dev/null | wc -l)" -ge "4" ]] || {
+        rm -rf "${boot_stage}"
+        error_msg "The staged /boot files are missing."
+    }
 
     # Delete the current kernel files
     rm -f /boot/config-* /boot/initrd.img-* /boot/System.map-* /boot/uInitrd-* /boot/vmlinuz-*
     rm -rf /boot/uInitrd /boot/Image /boot/zImage /boot/dtb-*
 
     # 01. For /boot five files
-    tar -mxzf boot-${kernel_name}.tar.gz -C /boot
+    cp -rf "${boot_stage}"/. /boot/ || {
+        rm -rf "${boot_stage}"
+        error_msg "Failed to copy staged /boot files into /boot."
+    }
+    rm -rf "${boot_stage}"
     [[ "${PLATFORM}" == "amlogic" ]] && (cd /boot && cp -f uInitrd-${kernel_name} uInitrd && cp -f vmlinuz-${kernel_name} zImage)
     [[ "${PLATFORM}" == "rockchip" ]] && (cd /boot && ln -sf uInitrd-${kernel_name} uInitrd && ln -sf vmlinuz-${kernel_name} Image)
     [[ "${PLATFORM}" == "allwinner" ]] && (cd /boot && cp -f uInitrd-${kernel_name} uInitrd && cp -f vmlinuz-${kernel_name} Image)
-    # wxy-oect: MODEL_ID numbers r304 and r306, require special handling of uInitrd
-    [[ "${MODEL_ID}" =~ ^(r304|r306)$ ]] && (cd /boot && ln -sf initrd.img-${kernel_name} uInitrd)
+    # wxy-oect: MODEL_ID numbers r306 and r307, require special handling of uInitrd
+    [[ "${MODEL_ID}" =~ ^(r306|r307)$ ]] && (cd /boot && ln -sf initrd.img-${kernel_name} uInitrd)
     [[ "$(ls /boot/*${kernel_name}* -l 2>/dev/null | grep "^-" | wc -l)" -ge "4" ]] || error_msg "The /boot files is missing."
     echo -e "${INFO} (1/4) Unpacking [ boot-${kernel_name}.tar.gz ] succeeded."
 
@@ -766,10 +814,21 @@ update_tar_kernel() {
     fi
 
     # 04. For /usr/lib/modules/${kernel_name}
+    # Extract first to a staging directory so that an extraction failure cannot leave
+    # the system without any kernel modules installed.
+    modules_stage="$(mktemp -d)"
+    tar -mxzf modules-${kernel_name}.tar.gz -C "${modules_stage}" || {
+        rm -rf "${modules_stage}"
+        error_msg "Failed to extract [ modules-${kernel_name}.tar.gz ]."
+    }
+    [[ -d "${modules_stage}/${kernel_name}" ]] || {
+        rm -rf "${modules_stage}"
+        error_msg "/usr/lib/modules/${kernel_name} kernel folder is missing."
+    }
     rm -rf /usr/lib/modules/*
-    tar -mxzf modules-${kernel_name}.tar.gz -C /usr/lib/modules
+    mv "${modules_stage}/${kernel_name}" /usr/lib/modules/
+    rm -rf "${modules_stage}"
     [[ -n "${header_path}" ]] && (cd /usr/lib/modules/${kernel_name}/ && rm -f build source && ln -sf /usr/src/${header_path} build)
-    [[ -d "/usr/lib/modules/${kernel_name}" ]] || error_msg "/usr/lib/modules/${kernel_name} kernel folder is missing."
     echo -e "${INFO} (4/4) Unpacking [ modules-${kernel_name}.tar.gz ] succeeded."
 
     # Update release file
@@ -792,8 +851,10 @@ update_uboot() {
 
     # With TEXT_OFFSET patch is [ 0108 ], without TEXT_OFFSET patch is [ 0000 ] and need to ues [ UBOOT_OVERLOAD ] file.
     need_overload="yes"
-    vmlinuz_file_name="$(find /boot -maxdepth 1 -type f -name "vmlinuz-*" 2>/dev/null | head -n 1)"
-    [[ "$(hexdump -n 15 -x "${vmlinuz_file_name}" 2>/dev/null | head -n 1 | awk '{print $7}')" == "0108" ]] && need_overload="no"
+    # Prefer the vmlinuz file matching the freshly installed kernel; fall back to the most recently modified vmlinuz.
+    vmlinuz_file_name="$(ls -1 /boot/vmlinuz-*${kernel_signature} 2>/dev/null | head -n 1)"
+    [[ -z "${vmlinuz_file_name}" ]] && vmlinuz_file_name="$(ls -1t /boot/vmlinuz-* 2>/dev/null | head -n 1)"
+    [[ -n "${vmlinuz_file_name}" && "$(hexdump -n 15 -x "${vmlinuz_file_name}" 2>/dev/null | head -n 1 | awk '{print $7}')" == "0108" ]] && need_overload="no"
 
     # Copy u-boot.ext and u-boot.emmc
     if [[ "${need_overload}" == "yes" && -f "/boot/${UBOOT_OVERLOAD}" ]]; then
@@ -1063,20 +1124,19 @@ sos_kernel() {
 help_info() {
     clear
     cat <<EOF
-  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-  │  Example: armbian-update -k 5.15.50 -u stable                                                                                  │
-  ├───────────┬──────────────┬─────────────────────────────────────┬───────────────────────────────────────────────────────────────┤
-  │  Optional │ Default      │ Value                               │ Description                                                   │
-  ├───────────┼──────────────┼─────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
-  │  -r       │ ophub/kernel │ <owner>/<repo>                      │ Set the repository for downloading kernels from github.com    │
-  │  -u       │ automate     │ stable/flippy/beta/rk3588/rk35xx/h6 │ Set the tags suffix of the kernel used                        │
-  │  -k       │ latest       │ kernel-version                      │ Set the kernel version                                        │
-  │  -c       │ None         │ domain-name                         │ Set the cdn domain name for accelerated access to github.com  │
-  │  -b       │ yes          │ yes/no                              │ Automatically backup the current system kernel                │
-  │  -d       │ tar          │ tar/deb                             │ Set the download type for the kernel                          │
-  │  -m       │ no           │ yes/no                              │ Use Mainline u-boot                                           │
-  │  -s       │ None         │ None/mmcblkX/nvmeXnX/sdX            │ [SOS] Restore the system kernel of eMMC/NVMe/sdX disk         │
-  └───────────┴──────────────┴─────────────────────────────────────┴───────────────────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │  Example: armbian-update -k 5.15.50 -u stable                                                                                   │
+  ├───────────┬───────────────┬─────────────────────────────────────┬───────────────────────────────────────────────────────────────┤
+  │  Optional │ Default       │ Value                               │ Description                                                   │
+  ├───────────┼───────────────┼─────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+  │  -r       │ ophub/kernel  │ <owner>/<repo>                      │ Set the repository for downloading kernels from github.com    │
+  │  -u       │ <KERNEL_TAGS> │ stable/flippy/beta/rk3588/rk35xx/h6 │ Set the tags suffix of the kernel used                        │
+  │  -k       │ latest        │ kernel-version                      │ Set the kernel version                                        │
+  │  -b       │ yes           │ yes/no                              │ Automatically backup the current system kernel                │
+  │  -d       │ deb           │ tar/deb                             │ Set the download type for the kernel                          │
+  │  -m       │ no            │ yes/no                              │ Use Mainline u-boot                                           │
+  │  -s       │ None          │ None/mmcblkX/nvmeXnX/sdX            │ [SOS] Restore the system kernel of eMMC/NVMe/sdX disk         │
+  └───────────┴───────────────┴─────────────────────────────────────┴───────────────────────────────────────────────────────────────┘
 EOF
     exit 0
 }
@@ -1084,6 +1144,13 @@ EOF
 # Check script permission
 [[ "$(id -u)" == "0" ]] || error_msg "Please run this script as root: [ sudo $0 ]"
 echo -e "${STEPS} Welcome to the Armbian Kernel Update Tool."
+
+# Detect backup-only invocation: exactly two args [ -b yes ] in any order is not supported,
+# but a single "-b yes" pair without other options should run the backup-only path.
+backup_only="no"
+if [[ "${#}" -eq 2 && "${1}" == "-b" && "${2}" == "yes" ]]; then
+    backup_only="yes"
+fi
 
 # Execute relevant functions based on the options
 if [[ "${@}" =~ ^-s(\s)* ]]; then
@@ -1093,7 +1160,7 @@ if [[ "${@}" =~ ^-s(\s)* ]]; then
     # Kernel restore successful
     sync && sleep 3
     echo -e "${SUCCESS} Kernel rescue completed successfully. Please remove the disk and restart the Armbian system."
-elif [[ "${@}" == "-b yes" ]]; then
+elif [[ "${backup_only}" == "yes" ]]; then
     # Backup current kernel
     init_var "${@}"
     backup_kernel
@@ -1101,7 +1168,7 @@ elif [[ "${@}" == "-b yes" ]]; then
     # Kernel backup successful
     sync && sleep 3
     echo -e "${SUCCESS} Kernel backup completed successfully."
-elif [[ "${@}" == "-h" ]]; then
+elif [[ "${1}" == "-h" || "${1}" == "--help" ]]; then
     # Display help information
     help_info
 else

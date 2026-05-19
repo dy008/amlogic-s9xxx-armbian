@@ -136,7 +136,10 @@ done
 # 26. hold packages and disable update_initramfs
 [[ -n "$(dpkg -l | awk '{print $2}' | grep initramfs-tools || true)" ]] && apt-mark hold initramfs-tools* 2>/dev/null && tolog "26. Hold initramfs-tools*"
 initramfs_conf="/etc/initramfs-tools/update-initramfs.conf"
-[[ -f "${initramfs_conf}" ]] && sed -i "s|^update_initramfs=.*|update_initramfs=no|g" "${initramfs_conf}" && tolog "27. Disable update-initramfs.conf"
+[[ -f "${initramfs_conf}" ]] && {
+    sed -i "s|^update_initramfs=.*|update_initramfs=no|g" "${initramfs_conf}" 2>/dev/null || true
+    tolog "27. Disable update-initramfs.conf"
+} || true
 
 # ===== C. Disable unnecessary system services =====
 
@@ -151,12 +154,12 @@ systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target 
 # Disable tips of the day for [ /etc/update-motd.d/35-armbian-tips ]
 motd_tips="/etc/default/armbian-motd"
 [[ -f "${motd_tips}" ]] && {
-    sed -i 's|^MOTD_DISABLE=""|MOTD_DISABLE="tips"|g' "${motd_tips}"
+    sed -i 's|^MOTD_DISABLE=""|MOTD_DISABLE="tips"|g' "${motd_tips}" 2>/dev/null || true
     tolog "54. Disable tips of the day"
 } || true
 quotes_cron="/etc/cron.daily/armbian-quotes"
 [[ -f "${quotes_cron}" ]] && {
-    sed -i "s|^curl |#curl |g" "${quotes_cron}"
+    sed -i "s|^curl |#curl |g" "${quotes_cron}" 2>/dev/null || true
     tolog "55. Disable quotes cron plan"
 } || true
 
@@ -212,19 +215,21 @@ tolog "59. Disable the ssh.socket and enable ssh.service"
 
     # Migrate legacy ANDROID_UBOOT parameter name
     [[ -n "$(cat ${ophub_release_file} | grep -E "^ANDROID_UBOOT=")" ]] && {
-        sed -i "s|^ANDROID_UBOOT=|BOOTLOADER_IMG=|g" ${ophub_release_file}
+        sed -i "s|^ANDROID_UBOOT=|BOOTLOADER_IMG=|g" ${ophub_release_file} 2>/dev/null || true
         tolog "80. Rename ANDROID_UBOOT to BOOTLOADER_IMG"
     }
 
     # Migrate legacy UBOOT_STATUS parameter name
     [[ -n "$(cat ${ophub_release_file} | grep -E "^UBOOT_STATUS=")" ]] && {
-        sed -i "s|^UBOOT_STATUS=|MLUBOOT_STATUS=|g" ${ophub_release_file}
+        sed -i "s|^UBOOT_STATUS=|MLUBOOT_STATUS=|g" ${ophub_release_file} 2>/dev/null || true
         tolog "81. Rename UBOOT_STATUS to MLUBOOT_STATUS"
     }
 
     # Add default kernel tags if missing
-    sed -i "s|^KERNEL_BRANCH=|KERNEL_TAGS=|g" ${ophub_release_file}
-    sed -i "s|^KERNEL_TAGS='6.x.y'|KERNEL_TAGS='6.1.y'|g" ${ophub_release_file}
+    sed -i \
+        -e "s|^KERNEL_BRANCH=|KERNEL_TAGS=|g" \
+        -e "s|^KERNEL_TAGS='6.x.y'|KERNEL_TAGS='6.12.y'|g" \
+        ${ophub_release_file} 2>/dev/null || true
     [[ -n "$(cat ${ophub_release_file} | grep -E "^KERNEL_TAGS=")" ]] || {
         [[ "${soc_name,,}" == "rk3588" ]] && KERNEL_TAGS="rk3588" || KERNEL_TAGS="stable"
         echo "KERNEL_TAGS='${KERNEL_TAGS}'" >>${ophub_release_file}
@@ -251,56 +256,71 @@ tolog "59. Disable the ssh.socket and enable ssh.service"
     # Update armbian-release configuration
     [[ -f "${armbian_release_file}" ]] && {
         [[ -n "${bd_name}" ]] && {
-            sed -i "s|^BOARD=.*|BOARD=\"${board_name}\"|g" ${armbian_release_file}
-            sed -i "s|^BOARD_NAME=.*|BOARD_NAME=\"${bd_name}\"|g" ${armbian_release_file}
+            sed -i \
+                -e "s|^BOARD=.*|BOARD=\"${board_name}\"|g" \
+                -e "s|^BOARD_NAME=.*|BOARD_NAME=\"${bd_name}\"|g" \
+                ${armbian_release_file} 2>/dev/null || true
         }
 
         short_version="$(cat ${armbian_release_file} | grep -E '^VERSION=' | grep -oE '[2-9][0-9]\.[0-9]{1,2}\.[0-9]{1,2}' | head -n 1 || true)"
         [[ -n "${short_version}" ]] && {
-            sed -i "s|^VERSION=.*|VERSION=\"${short_version}\"|g" ${armbian_release_file}
-            sed -i "s|^REVISION=.*|REVISION=\"${short_version}\"|g" ${armbian_release_file}
+            sed -i \
+                -e "s|^VERSION=.*|VERSION=\"${short_version}\"|g" \
+                -e "s|^REVISION=.*|REVISION=\"${short_version}\"|g" \
+                ${armbian_release_file} 2>/dev/null || true
         }
 
-        sed -i "s|^BOOT_SOC=.*|BOOT_SOC=\"${soc_name}\"|g" ${armbian_release_file}
-        sed -i "s|^BOARDFAMILY=.*|BOARDFAMILY=\"${family_name}\"|g" ${armbian_release_file}
-        sed -i "s|^LINUXFAMILY=.*|LINUXFAMILY=\"${platform_name}\"|g" ${armbian_release_file}
-        sed -i "s|^VENDOR=.*|VENDOR=\"Armbian OS\"|g" ${armbian_release_file}
-        sed -i "s|^IMAGE_TYPE=.*|IMAGE_TYPE=rebuild|g" ${armbian_release_file}
-        sed -i "s|^BOARD_TYPE=.*|BOARD_TYPE=diy|g" ${armbian_release_file}
-        sed -i "s|^FORCE_BOOTSCRIPT_UPDATE=.*|FORCE_BOOTSCRIPT_UPDATE=\"no\"|g" ${armbian_release_file}
-        sed -i "s|^BOOTSCRIPT_FORCE_UPDATE=.*|BOOTSCRIPT_FORCE_UPDATE=\"no\"|g" ${armbian_release_file}
-        sed -i "s|^FORCE_UBOOT_UPDATE=.*|FORCE_UBOOT_UPDATE=\"no\"|g" ${armbian_release_file}
+        sed -i \
+            -e "s|^BOOT_SOC=.*|BOOT_SOC=\"${soc_name}\"|g" \
+            -e "s|^BOARDFAMILY=.*|BOARDFAMILY=\"${family_name}\"|g" \
+            -e "s|^LINUXFAMILY=.*|LINUXFAMILY=\"${platform_name}\"|g" \
+            -e "s|^VENDOR=.*|VENDOR=\"Armbian OS\"|g" \
+            -e "s|^IMAGE_TYPE=.*|IMAGE_TYPE=rebuild|g" \
+            -e "s|^BOARD_TYPE=.*|BOARD_TYPE=diy|g" \
+            -e "s|^FORCE_BOOTSCRIPT_UPDATE=.*|FORCE_BOOTSCRIPT_UPDATE=\"no\"|g" \
+            -e "s|^BOOTSCRIPT_FORCE_UPDATE=.*|BOOTSCRIPT_FORCE_UPDATE=\"no\"|g" \
+            -e "s|^FORCE_UBOOT_UPDATE=.*|FORCE_UBOOT_UPDATE=\"no\"|g" \
+            ${armbian_release_file} 2>/dev/null || true
         tolog "85. Update custom board info: ${armbian_release_file}"
     }
 
     # Update armbian-image-release configuration
     [[ -f "${armbian_image_file}" ]] && {
         [[ -n "${bd_name}" ]] && {
-            sed -i "s|^BOARD=.*|BOARD=\"${board_name}\"|g" ${armbian_image_file}
-            sed -i "s|^BOARD_NAME=.*|BOARD_NAME=\"${bd_name}\"|g" ${armbian_image_file}
+            sed -i \
+                -e "s|^BOARD=.*|BOARD=\"${board_name}\"|g" \
+                -e "s|^BOARD_NAME=.*|BOARD_NAME=\"${bd_name}\"|g" \
+                ${armbian_image_file} 2>/dev/null || true
         }
 
         short_version="$(cat ${armbian_image_file} | grep -E '^VERSION=' | grep -oE '[2-9][0-9]\.[0-9]{1,2}\.[0-9]{1,2}' | head -n 1 || true)"
         [[ -n "${short_version}" ]] && {
-            sed -i "s|^VERSION=.*|VERSION=\"${short_version}\"|g" ${armbian_image_file}
-            sed -i "s|^REVISION=.*|REVISION=\"${short_version}\"|g" ${armbian_image_file}
+            sed -i \
+                -e "s|^VERSION=.*|VERSION=\"${short_version}\"|g" \
+                -e "s|^REVISION=.*|REVISION=\"${short_version}\"|g" \
+                ${armbian_image_file} 2>/dev/null || true
         }
 
-        sed -i "s|^BOARDFAMILY=.*|BOARDFAMILY=\"${family_name}\"|g" ${armbian_image_file}
-        sed -i "s|^LINUXFAMILY=.*|LINUXFAMILY=\"${platform_name}\"|g" ${armbian_image_file}
-        sed -i "s|^VENDOR=.*|VENDOR=\"Armbian OS\"|g" ${armbian_image_file}
-        sed -i "s|^IMAGE_TYPE=.*|IMAGE_TYPE=rebuild|g" ${armbian_image_file}
-        sed -i "s|^BOARD_TYPE=.*|BOARD_TYPE=diy|g" ${armbian_image_file}
-        sed -i "s|^FORCE_BOOTSCRIPT_UPDATE=.*|FORCE_BOOTSCRIPT_UPDATE=\"no\"|g" ${armbian_image_file}
-        sed -i "s|^BOOTSCRIPT_FORCE_UPDATE=.*|BOOTSCRIPT_FORCE_UPDATE=\"no\"|g" ${armbian_image_file}
+        sed -i \
+            -e "s|^BOARDFAMILY=.*|BOARDFAMILY=\"${family_name}\"|g" \
+            -e "s|^LINUXFAMILY=.*|LINUXFAMILY=\"${platform_name}\"|g" \
+            -e "s|^VENDOR=.*|VENDOR=\"Armbian OS\"|g" \
+            -e "s|^VENDORPRETTYNAME=.*|VENDORPRETTYNAME=\"Armbian OS\"|g" \
+            -e "s|^IMAGE_TYPE=.*|IMAGE_TYPE=rebuild|g" \
+            -e "s|^BOARD_TYPE=.*|BOARD_TYPE=diy|g" \
+            -e "s|^FORCE_BOOTSCRIPT_UPDATE=.*|FORCE_BOOTSCRIPT_UPDATE=\"no\"|g" \
+            -e "s|^BOOTSCRIPT_FORCE_UPDATE=.*|BOOTSCRIPT_FORCE_UPDATE=\"no\"|g" \
+            ${armbian_image_file} 2>/dev/null || true
         tolog "86. Update custom board info: ${armbian_image_file}"
     }
 
     # Update os-release information
     [[ -f "${os_release_file}" ]] && {
         short_version="$(cat ${os_release_file} | grep -E '^PRETTY_NAME=' | grep -oE '[2-9][0-9]\.[0-9]{1,2}\.[0-9]{1,2}' | head -n 1 || true)"
-        sed -i "s|^PRETTY_NAME=.*|PRETTY_NAME=\"Armbian OS ${short_version} ${DISTRIBUTION_CODENAME}\"|g" ${os_release_file}
-        sed -i "s|^ARMBIAN_PRETTY_NAME=.*|ARMBIAN_PRETTY_NAME=\"Armbian OS ${short_version} ${DISTRIBUTION_CODENAME}\"|g" ${os_release_file}
+        sed -i \
+            -e "s|^PRETTY_NAME=.*|PRETTY_NAME=\"Armbian OS ${short_version} ${DISTRIBUTION_CODENAME}\"|g" \
+            -e "s|^ARMBIAN_PRETTY_NAME=.*|ARMBIAN_PRETTY_NAME=\"Armbian OS ${short_version} ${DISTRIBUTION_CODENAME}\"|g" \
+            ${os_release_file} 2>/dev/null || true
         tolog "87. Update custom board info: ${os_release_file}"
     }
 
@@ -314,7 +334,7 @@ tolog "59. Disable the ssh.socket and enable ssh.service"
 
 # Set system distribution status to supported
 [[ -n "${DISTRIBUTION_CODENAME}" && -f "${armbian_os_status}" ]] && {
-    sed -i "s|^${DISTRIBUTION_CODENAME}=.*|${DISTRIBUTION_CODENAME}=supported|g" ${armbian_os_status}
+    sed -i "s|^${DISTRIBUTION_CODENAME}=.*|${DISTRIBUTION_CODENAME}=supported|g" ${armbian_os_status} 2>/dev/null || true
     tolog "90. Set ${DISTRIBUTION_CODENAME} distribution status to supported"
 } || true
 
@@ -328,8 +348,10 @@ todo_rootfs_resize="/root/.no_rootfs_resize"
 # Hide WAN & IPv6 addresses from MOTD
 ip_info_file="/etc/update-motd.d/20-ip-info"
 [[ -f "${ip_info_file}" ]] && {
-    sed -i '/^get_wan.*_address/s/{.*/{ true; }/' ${ip_info_file}
-    sed -i '/if.*ipv6s.*||.*wan6/,/fi/s/^/#/' ${ip_info_file}
+    sed -i \
+        -e '/^get_wan.*_address/s/{.*/{ true; }/' \
+        -e '/^[#[:space:]]*if[^#]*ipv6s.*||.*wan6/,/^[#[:space:]]*fi[[:space:]]*$/{/^[[:space:]]*#/!s/^/#/}' \
+        ${ip_info_file} 2>/dev/null || true
     tolog "92. Hide WAN & IPv6 addresses from MOTD"
 } || true
 

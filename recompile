@@ -94,10 +94,7 @@ init_var() {
 
 install_docker_engine() {
     echo -e "${STEPS} Installing Docker engine..."
-
     curl -fsSL https://get.docker.com | sh
-    usermod -aG docker ${USER}
-    newgrp docker
 }
 
 launch_docker_container() {
@@ -106,6 +103,7 @@ launch_docker_container() {
     # Check if the Armbian Docker container is running
     if [[ "$(docker ps -q -f name=${docker_container})" ]]; then
         echo -e "${INFO} The docker container [ ${docker_container} ] is running."
+        container_freshly_started="no"
     else
         # Remove the stopped Armbian Docker container
         [[ "$(docker ps -aq -f status=exited -f name=${docker_container})" ]] && {
@@ -113,9 +111,14 @@ launch_docker_container() {
             docker rm -f ${docker_container} >/dev/null 2>&1
         }
 
-        # Enable QEMU emulation for multi-architecture builds
-        echo -e "${INFO} Enable QEMU emulation for multi-architecture builds..."
-        docker run --rm --privileged multiarch/qemu-user-static --reset -p yes 2>/dev/null || true
+        # Enable QEMU emulation only for cross-arch hosts. When the host is already
+        # aarch64 we are running natively and do not need binfmt registration.
+        if [[ "${arch_info}" != "aarch64" ]]; then
+            echo -e "${INFO} Enable QEMU emulation for multi-architecture builds..."
+            docker run --rm --privileged multiarch/qemu-user-static --reset -p yes 2>/dev/null || true
+        else
+            echo -e "${INFO} Native aarch64 host detected, skipping QEMU registration."
+        fi
 
         # Set Docker mount paths
         echo -e "${INFO} Setting up Docker host mount paths..."
@@ -124,7 +127,8 @@ launch_docker_container() {
         [[ -d "${compile_path}" ]] || mkdir -p ${compile_path}
         [[ -d "${ccache_path}" ]] || mkdir -p ${ccache_path}
 
-        # Pull the Armbian Docker image
+        # Pull the Armbian Docker image. Use --restart=no because this is a one-shot
+        # build container; auto-restart on host reboot is not desirable here.
         echo -e "${INFO} Pulling the Docker image: [ ${docker_image} ]..."
         docker run -d --privileged \
             --name ${docker_container} \
@@ -133,19 +137,27 @@ launch_docker_container() {
             -v /etc/localtime:/etc/localtime:ro \
             -v /etc/timezone:/etc/timezone:ro \
             -e CCACHE_DIR=/root/.ccache \
-            --restart=always \
+            --restart=no \
             ${docker_image}
+        container_freshly_started="yes"
     fi
 }
 
 configure_and_compile() {
     echo -e "${STEPS} Configuring the Docker environment and compiling the kernel..."
 
-    echo -e "${INFO} Synchronizing server time."
-    ntpdate ntp.ubuntu.com 0.pool.ntp.org || true
+    # Synchronize server time using ntpdate if it is available.
+    if command -v ntpdate >/dev/null 2>&1; then
+        echo -e "${INFO} Synchronizing server time."
+        ntpdate ntp.ubuntu.com 0.pool.ntp.org || true
+    fi
 
-    echo -e "${INFO} Restarting Docker container..."
-    docker restart ${docker_container} >/dev/null && sleep 5
+    # Only restart when reusing a pre-existing container; a freshly started one
+    # is already healthy and an immediate restart only wastes the startup time.
+    if [[ "${container_freshly_started:-no}" != "yes" ]]; then
+        echo -e "${INFO} Restarting Docker container..."
+        docker restart ${docker_container} >/dev/null && sleep 5
+    fi
 
     echo -e "${INFO} Syncing scripts in Docker container..."
     docker exec -i "${docker_container}" bash "${docker_script}" -u
